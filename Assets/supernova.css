@@ -22,3 +22,6 @@ body[data-background=off] .app,body[data-background=off][data-space-theme=on] .a
 @media(max-width:1150px){.supernova-tools{margin-left:22px;margin-right:22px;gap:10px}.supernova-tools>span{font-size:8px}}
 @media(max-width:820px){.supernova-tools{margin-left:18px;margin-right:18px}.app,body[data-space-theme=on] .app{background-position:center,60% 0;background-attachment:scroll,scroll}.supernova-tools label{font-size:9px}}
 @media(max-width:600px){.supernova-tools{margin-left:13px;margin-right:13px;padding:12px}.supernova-tools>span{min-width:80px}.supernova-tools input{width:80px}.supernova-swatches{min-width:100px}.app,body[data-space-theme=on] .app{background-size:100% 100%,auto 950px;background-position:center,58% 70px;background-repeat:no-repeat,no-repeat}.future-heading,.protocol-area{padding:14px}}
+
+/* Visible AI provenance label; independent of the 60% background shading. */
+.ai-image-disclosure{position:fixed;right:12px;bottom:10px;z-index:1000;max-width:calc(100vw - 24px);padding:6px 10px;border:1px solid #c2dde480;border-radius:4px;background:#06101ff2;color:#fff;font:12px/1.4 'Segoe UI',sans-serif;letter-spacing:.02em;pointer-events:none}
