@@ -1,0 +1,38 @@
+(() => {
+ const byId=id=>document.getElementById(id),safe=(v,n=700)=>String(v??'').slice(0,n);let cache={donki:{},radlab:null},loading=false;
+ try{const stored=JSON.parse(localStorage.getItem('orbit-nasa-cache-v1')||'null');if(stored&&typeof stored.donki==='object')cache=stored;}catch{}
+ const save=()=>{try{localStorage.setItem('orbit-nasa-cache-v1',JSON.stringify(cache));}catch{byId('donkiStatus').textContent+=' Could not save the cache.';}};
+ const utc=text=>text?new Date(text).toISOString().replace('T',' ').slice(0,19)+' UTC':'None';
+ function normalizeDonki(raw,kind){
+  if(raw===null)return [];if(!Array.isArray(raw))throw Error('Unexpected DONKI response format.');
+  return raw.slice(0,1000).map(r=>{const time=r.beginTime||r.startTime||r.eventTime;if(!Number.isFinite(Date.parse(time)))return null;return {id:safe(r.flrID||r.activityID||r.sepID||r.cmeID||time,160),kind,eventTime:new Date(time).toISOString(),publicationTime:r.submissionTime&&Number.isFinite(Date.parse(r.submissionTime))?new Date(r.submissionTime).toISOString():null,classType:safe(r.classType||'',60),note:safe(r.note||'',700),instruments:(Array.isArray(r.instruments)?r.instruments:[]).map(i=>safe(i.displayName,100)).join(', '),link:safe(r.link,400)};}).filter(Boolean);
+ }
+ function normalizeRadlab(raw){
+  if(!raw||!Array.isArray(raw.columns)||!Array.isArray(raw.data)||!raw.columns.includes('timestamp')||!raw.columns.includes('absorbed_dose_rate'))throw Error('Unexpected RadLab columns; no unit or numerical conversion was performed.');
+  const index=key=>raw.columns.indexOf(key);return raw.data.map(row=>{if(!Array.isArray(row))return null;let t=String(row[index('timestamp')]||'');if(!/[Zz]|[+-]\d{2}:\d{2}$/.test(t))t+='Z';if(!Number.isFinite(Date.parse(t)))return null;const dose=row[index('absorbed_dose_rate')];return {time:new Date(t).toISOString(),instrument:safe(row[index('instrument_id')],100),spacecraft:safe(row[index('spacecraft')]||'ISS',80),dose:typeof dose==='number'&&Number.isFinite(dose)?dose:null,unit:'µGy/h'};}).filter(Boolean).sort((a,b)=>a.time.localeCompare(b.time));
+ }
+ function renderDonki(){
+  const list=byId('donkiEvents');list.replaceChildren();const metadata=[];let events=[];
+  for(const kind of ['FLR','CME','SEP']){const saved=cache.donki[kind];metadata.push(saved?`${kind}: ${saved.events.length} events; last successful fetch ${utc(saved.fetchedAt)}; query ${saved.start} — ${saved.end}`:`${kind}: no successful fetch yet`);if(saved)events.push(...saved.events);}
+  byId('donkiMetadata').textContent=metadata.join(' | ');events.sort((a,b)=>b.eventTime.localeCompare(a.eventTime));
+  if(!events.length){list.textContent='No records. A successful empty response is reported as “no events found”; a connection error as “data unavailable”.';return;}
+  events.slice(0,45).forEach(event=>{const box=document.createElement('article');box.className='nasa-event';const title=document.createElement('strong');title.textContent=`NASA / ${event.kind}${event.classType?' · '+event.classType:''}`;const time=document.createElement('p');time.textContent='Event: '+utc(event.eventTime)+(event.publicationTime?' / Published: '+utc(event.publicationTime):'');const instrument=document.createElement('small');instrument.textContent='Observing instrument: '+(event.instruments||'Not specified')+' · Not directly linked to the selected astronaut.';box.append(title,time,instrument);if(event.note){const note=document.createElement('p');note.textContent=event.note;box.append(note);}const detail=document.createElement('details'),summary=document.createElement('summary'),content=document.createElement('p');summary.textContent='Source / event ID';content.textContent=event.id+' '+event.link;detail.append(summary,content);box.append(detail);list.append(box);});
+ }
+ function renderRadlab(){const saved=cache.radlab;byId('radlabRows').replaceChildren();if(!saved){byId('radlabMetadata').textContent='No archive query yet.';return;}
+  byId('radlabMetadata').textContent=`ARCHIVE · ${saved.spacecraft} / ${saved.instrument} · Query ${saved.start} — ${saved.end} UTC · ${saved.rows.length} measurements, first 150 shown · Last successful fetch ${utc(saved.fetchedAt)}. Not the current mission dose.`;
+  saved.rows.slice(0,150).forEach(record=>{const row=document.createElement('tr');for(const value of [utc(record.time),record.instrument,record.spacecraft,record.dose===null?'No measurement':record.dose.toLocaleString('en-US',{maximumFractionDigits:6})]){const td=document.createElement('td');td.textContent=value;row.append(td);}byId('radlabRows').append(row);});
+ }
+ async function refreshDonki(){if(loading)return;loading=true;byId('donkiRefresh').disabled=true;byId('donkiStatus').textContent='Fetching FLR / CME / SEP events from NASA…';
+  try{const result=await OrbitBridge.request('nasa-donki');const errors=[];let success=0;for(const kind of ['FLR','CME','SEP']){const part=result.parts?.[kind];if(!part?.ok){errors.push(kind+': '+(part?.error||'No response'));continue;}try{const events=normalizeDonki(part.data,kind);cache.donki[kind]={events,fetchedAt:part.fetchedAt,start:result.start,end:result.end,url:part.url};success++;}catch(error){errors.push(kind+': '+error.message);}}
+   save();renderDonki();byId('donkiStatus').textContent=`${success}/3 event sources updated. `+(errors.length?'Unavailable sources retain their last successful records and dates. '+errors.join(' / '):'Successful empty responses indicate no events found in this interval. This does not establish the absence of hazards at all locations.');
+  }catch(error){byId('donkiStatus').textContent='Connection failed: '+error.message+' The last successful cache is shown with its dates; no demo data was substituted.';renderDonki();}finally{loading=false;byId('donkiRefresh').disabled=false;}
+ }
+ function validateRange(start,end){const a=Date.parse(start+'Z'),b=Date.parse(end+'Z');if(!Number.isFinite(a)||!Number.isFinite(b)||b<=a||b-a>21600000||b>Date.now())throw Error('Select a past UTC interval in chronological order, no longer than 6 hours.');}
+ async function fetchRadlab(){byId('radlabFetch').disabled=true;byId('radlabStatus').textContent='Querying the NASA RadLab archive…';try{const start=byId('radlabStart').value,end=byId('radlabEnd').value;validateRange(start,end);const result=await OrbitBridge.request('nasa-radlab',{start,end});const rows=normalizeRadlab(result.data);cache.radlab={...result,rows,data:undefined};save();renderRadlab();byId('radlabStatus').textContent=rows.length?'NASA archive retrieved. It was not imported into personal measurements.':'Query successful; no measurements found in this interval.';}catch(error){byId('radlabStatus').textContent=error.message+' Any previous successful query is retained with its original date range.';renderRadlab();}finally{byId('radlabFetch').disabled=false;}}
+ byId('donkiRefresh').onclick=refreshDonki;byId('radlabFetch').onclick=fetchRadlab;
+ let auto=true;try{auto=localStorage.getItem('orbit-nasa-auto-v1')!=='false';}catch{}byId('nasaAuto').checked=auto;byId('nasaAuto').onchange=e=>{try{localStorage.setItem('orbit-nasa-auto-v1',String(e.target.checked));}catch{}};
+ renderDonki();renderRadlab();byId('donkiStatus').textContent='Source timestamps are shown below. No refresh has occurred in this session yet.';
+ // Tests exercise parsers and bridge separately; never silently generate substitute events.
+ window.OrbitNasa={normalizeDonki,normalizeRadlab,validateRange,refreshDonki,fetchRadlab,get cache(){return cache;}};
+ if(!window.ORBIT_SMOKE_TEST&&auto)refreshDonki();setInterval(()=>{if(!window.ORBIT_SMOKE_TEST&&byId('nasaAuto').checked)refreshDonki();},900000);
+})();

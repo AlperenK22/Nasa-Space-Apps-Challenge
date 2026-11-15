@@ -1,0 +1,81 @@
+window.OrbitDataTests=async check=>{
+ const D=OrbitData,E=OrbitEngine,O=ORBIT,now=Date.now();
+ const throws=(fn)=>{try{fn();return false;}catch{return true;}};
+ check('manual encrypted store ready',D.ready);
+ const raw={metric:'hr',value:'72,5',unit:'bpm',measuredAt:new Date(now-10000).toISOString(),source:'TEST kullanıcı kaydı',member:'0',environment:'ISS'};
+ const item=D.validate(raw);check('manual decimal comma',item.value===72.5);
+ check('English document language',document.documentElement.lang==='en');
+ check('English menu label',document.getElementById('sidebarToggle').textContent.trim()==='Menu');
+ for(const [metric,legacy,unit] of [['hr','atım/dk','bpm'],['resp','nefes/dk','breaths/min'],['rate','µSv/saat','µSv/h'],['area','µGy/saat','µGy/h'],['calcium','mg/24 saat','mg/24 h']]){
+  const normalized=D.validate({...raw,metric,unit:legacy});check('legacy unit label preserved '+metric,normalized.unit===unit&&normalized.value===72.5);
+ }
+ const legacyCsv=D.parseCsv(csvLegacy(),{member:'0',environment:'ISS'});check('legacy CSV units accepted',legacyCsv[0].unit==='bpm'&&legacyCsv[0].source==='Original source');
+ function csvLegacy(){return 'metric,value,unit,measuredAt,source\nhr,72,atım/dk,'+raw.measuredAt+',Original source';}
+ check('manual wrong unit rejected',throws(()=>D.validate({...raw,unit:'mSv'})));
+ check('manual future timestamp rejected',throws(()=>D.validate({...raw,measuredAt:new Date(now+3600000).toISOString()})));
+ check('manual invalid calendar rejected',throws(()=>D.validate({...raw,measuredAt:'2025-02-30T12:00:00Z'})));
+ check('manual empty value rejected',throws(()=>D.validate({...raw,value:''})));
+ check('manual nonsensical value rejected',throws(()=>D.validate({...raw,value:'10000'})));
+ check('manual missing source rejected',throws(()=>D.validate({...raw,source:''})));
+ const csv='metric,value,unit,measuredAt,source\nhr,"72,5",bpm,'+raw.measuredAt+',TEST CSV kaydı';
+ const parsed=D.parseCsv(csv,{member:'0',environment:'ISS'});check('CSV quoted comma',parsed[0].value===72.5);
+ check('CSV invalid row prevents batch',throws(()=>D.parseCsv(csv+'\nresp,15,mSv,'+raw.measuredAt+',TEST kaynak',{member:'0',environment:'ISS'})));
+ check('CSV unknown header rejected',throws(()=>D.parseCsv(csv.replace('metric,value','metric,wrong'),{member:'0',environment:'ISS'})));
+ const before=D.records.length;const added=await D.commit([item,item]);check('manual save deduplicates batch',added===1);check('manual history updated',D.records.length===before+1);
+ const stored=await OrbitBridge.request('manual-load');check('encrypted native round trip',stored.some(r=>r.id===item.id&&r.value===72.5));
+ document.getElementById('crew').value='0';document.getElementById('environment').value='ISS';document.getElementById('environment').dispatchEvent(new Event('change'));D.setMode('manual');O.selectMetric('hr');
+ check('manual actual value rendered',document.getElementById('readingValue').textContent==='72.5');
+ check('manual no synthetic fill',O.state.snapshot.values.resp===null);
+ check('manual per metric timestamp',O.state.snapshot.meta.hr.measuredAt===item.measuredAt);
+ check('manual fresh timestamp recognized',E.isFresh(O.state.snapshot,E.METRICS.find(m=>m.id==='hr')));
+ check('manual no demo medical rules',O.state.alerts.every(a=>a.id==='manual-unvalidated'));
+ check('manual no estimated safe time',E.projection(O.state.snapshot,'ISS').hours===null);
+ check('manual no clinical forecast',FutureRisks.assess(O.state.snapshot,'ISS').exposure===null);
+ check('manual source label',document.getElementById('readingSource').textContent.includes('TEST kullanıcı kaydı'));
+ O.selectMetric('resp');check('manual missing rendered dash',document.getElementById('readingValue').textContent==='—');
+ document.getElementById('crew').value='1';O.newData();check('crew records isolated',O.state.snapshot.values.hr===null);
+ document.getElementById('crew').value='0';document.getElementById('environment').value='Mars';document.getElementById('environment').dispatchEvent(new Event('change'));check('environment records isolated',O.state.snapshot.values.hr===null);
+ document.getElementById('environment').value='ISS';document.getElementById('environment').dispatchEvent(new Event('change'));
+ const report=O.makeReport(false);check('manual report provenance',report.dataMode==='manual'&&report.snapshot.values.hr===72.5);
+ const persistedReports=JSON.parse(localStorage.getItem('orbit-decision-reports-v1'));check('manual health report not in plaintext localStorage',persistedReports.every(r=>r.dataMode!=='manual'));
+ const events=OrbitNasa.normalizeDonki([{flrID:'fixture-only',beginTime:'2022-04-01T00:00Z',classType:'M1.0',submissionTime:'2022-04-01T01:00Z',note:'test parser'}],'FLR');check('NASA event time preserved',events[0].eventTime==='2022-04-01T00:00:00.000Z');
+ check('DONKI empty response handled',OrbitNasa.normalizeDonki(null,'SEP').length===0);
+ check('DONKI invalid response rejected',throws(()=>OrbitNasa.normalizeDonki({wrong:true},'CME')));
+ const rad=OrbitNasa.normalizeRadlab({columns:['timestamp','instrument_id','absorbed_dose_rate','spacecraft'],data:[['2022-04-01T00:00:00','DosTel1',2.3,'ISS'],['2022-04-01T00:01:00','DosTel1',null,'ISS']]});
+ check('RadLab explicit units',rad[0].unit==='µGy/h'&&rad[0].dose===2.3);
+ check('RadLab missing dose not zero',rad[1].dose===null);
+ check('RadLab missing unit field rejected',throws(()=>OrbitNasa.normalizeRadlab({columns:['timestamp'],data:[]})));
+ check('RadLab long range rejected',throws(()=>OrbitNasa.validateRange('2022-04-01T00:00','2022-04-02T00:00')));
+ const oldRequest=OrbitBridge.request,cacheBefore=JSON.stringify(OrbitNasa.cache),personBefore=JSON.stringify(O.state.snapshot.values);
+ OrbitBridge.request=()=>Promise.reject(new Error('TEST bağlantı kesintisi'));
+ try{await OrbitNasa.refreshDonki();check('NASA failure preserves cache',JSON.stringify(OrbitNasa.cache)===cacheBefore);check('NASA failure visible',document.getElementById('donkiStatus').textContent.includes('Connection failed'));check('NASA never fills personal values',JSON.stringify(O.state.snapshot.values)===personBefore);}finally{OrbitBridge.request=oldRequest;}
+ for(const route of ['data','nasa']){document.querySelector(`.side-link[data-route="${route}"]`).click();check('new page '+route,OrbitPages.current===route&&!document.querySelector(`.app-page[data-page="${route}"]`).hidden);}
+ const R=ReferenceAlerts;
+ function refSample(metric,value,extra={}){const s={id:'reference-fixture',mode:'manual',at:Date.now(),member:'0',values:Object.fromEntries(E.METRICS.map(m=>[m.id,null])),meta:{},history:{},age:{},baseline:{}};s.values[metric]=value;s.meta[metric]={id:'fixture-'+metric,value,measuredAt:Date.now(),unit:D.schema[metric][2],context:'rest',source:'TEST reference',...extra};return s;}
+ check('reference lower boundary included',R.assess(refSample('hr',60),'hr').state==='within');
+ check('reference upper boundary included',R.assess(refSample('hr',100),'hr').state==='within');
+ check('reference low pulse',R.assess(refSample('hr',59),'hr').state==='low');
+ check('reference high pulse',R.assess(refSample('hr',101),'hr').state==='high');
+ check('reference high breathing',R.assess(refSample('resp',19),'resp').state==='high');
+ check('reference low lymphocytes',R.assess(refSample('lymph',.9),'lymph').state==='low');
+ check('reference high lymphocytes',R.assess(refSample('lymph',4.9),'lymph').state==='high');
+ check('reference urine upper bound',R.assess(refSample('calcium',250,{context:'normal-diet'}),'calcium').state==='within');
+ check('reference high urine calcium',R.assess(refSample('calcium',251,{context:'normal-diet'}),'calcium').state==='high');
+ check('reference exercise not resting alarm',!R.assess(refSample('hr',150,{context:'activity'}),'hr').out);
+ check('reference unknown context disclosed',R.assess(refSample('hr',150,{context:'unknown'}),'hr').contextNote.length>0);
+ check('reference stale measure identified',R.assess(refSample('hr',110,{measuredAt:Date.now()-600000}),'hr').stale);
+ check('reference missing is not normal',R.assess(refSample('hr',null),'hr').state==='missing');
+ check('reference no fabricated radiation norm',R.assess(refSample('rate',500),'rate').state==='undefined');
+ check('reference custom report interval',R.assess(refSample('hr',110,{reference:{low:50,high:120,source:'TEST laboratuvar'}}),'hr').state==='within');
+ check('reference inverted interval rejected',throws(()=>D.validate({...raw,reference:{low:100,high:60,source:'TEST kaynak'}})));
+ check('reference source required',throws(()=>D.validate({...raw,reference:{low:50,high:120,source:''}})));
+ const savedSnapshot=O.state.snapshot;O.state.snapshot=refSample('hr',110);O.selectMetric('hr');R.sync();
+ check('reference warning badge rendered',document.querySelector('[data-metric="hr"]').dataset.reference==='high');
+ check('reference warning text rendered',document.getElementById('referenceWarnings').textContent.includes('Reference 60–100'));
+ R.sync();check('reference badge no duplicate',document.querySelectorAll('[data-metric="hr"] .reference-badge').length===1);
+ const refReport=O.makeReport(false);check('reference warnings in report',refReport.referenceWarnings.some(w=>w.metric==='hr'&&w.state==='high'));
+ const voiceInfo=await OrbitBridge.request('voice-status');check('native voice availability reported',voiceInfo.language==='en'&&voiceInfo.message.length>0);
+ const mutedVoice=await OrbitBridge.request('speak-alert',{text:'Test referans uyarısı.'});check('test speech never audible',mutedVoice.mode==='test-muted');
+ O.state.snapshot=savedSnapshot;
+ await OrbitBridge.request('manual-save',{records:[]});localStorage.removeItem('orbit-decision-reports-v1');D.setMode('demo');OrbitPages.navigate('health');
+};

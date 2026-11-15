@@ -1,0 +1,11 @@
+/* Metric identity colors remain visible when a sample is stale. */
+.metrics .card:nth-child(5n+1){--tone:#8bd2bd;color:#143b30}
+.metrics .card:nth-child(5n+2){--tone:#b5b2ed;color:#30294d}
+.metrics .card:nth-child(5n+3){--tone:#efa0ab;color:#4b2631}
+.metrics .card:nth-child(5n+4){--tone:#f1bd8f;color:#49301d}
+.metrics .card:nth-child(5n){--tone:#93cbdc;color:#1b3947}
+.metrics .card,.metrics .card.stale{background:var(--tone)!important}
+.metrics .card .data-tag{display:table;margin-top:8px;padding:4px 7px;border-radius:5px;font-size:9px!important;line-height:1.4;opacity:1;background:#ffffff26;color:inherit}
+.metrics .card.stale .data-tag{background:#202b2c; color:#fff0c7;border-left:3px solid #f0cf87}
+.metrics .card.stale strong,.metrics .card.stale small{opacity:1}
+.metrics .card[aria-pressed=true]{outline:2px solid #f7f4e9;outline-offset:4px}
